@@ -58,6 +58,7 @@ class Hue2MQTT:
         # Reverse lookup: uniqueid / group id -> alias
         self._light_alias = {v: k for k, v in self.config.alias.light.items()}
         self._group_alias = {v: k for k, v in self.config.alias.group.items()}
+        self._sensor_alias = {v: k for k, v in self.config.alias.sensor.items()}
 
         self._setup_logging(verbose, welcome_message=welcome_message)
         self._setup_event_loop()
@@ -176,7 +177,8 @@ class Hue2MQTT:
 
     def publish_sensor(self, sensor: SensorInfo) -> None:
         """Publish information about a group to MQTT."""
-        self._mqtt.publish(f"sensor/{sensor.uniqueid}", sensor, retain=True)
+        for name in self._topic_names(sensor.uniqueid, self._sensor_alias):
+            self._mqtt.publish(f"sensor/{name}", sensor, retain=True)
 
     async def handle_set_light(self, match: Match[str], payload: str) -> None:
         """Handle an update to a light."""
@@ -303,7 +305,13 @@ class Hue2MQTT:
                 (group.name, str(group.id), str(group.raw.get("type", "")))
                 for group in self._iter(self._bridge.groups)
             ]
-        print(render_aliases(lights, groups), end="")  # noqa: T201
+            # Virtual sensors are not published, so they do not need an alias
+            sensors: List[Tuple[str, str]] = [
+                (sensor.name, sensor.raw["uniqueid"])
+                for sensor in self._iter(self._bridge.sensors)
+                if "uniqueid" in sensor.raw and "productname" in sensor.raw
+            ]
+        print(render_aliases(lights, groups, sensors), end="")  # noqa: T201
 
     @staticmethod
     def _iter(items: Any) -> List[Any]:

@@ -59,7 +59,7 @@ Run it under a supervisor that restarts it, e.g. systemd or Docker with a restar
 
 ### Aliases
 
-Lights and groups can be given an alias, which is used in the MQTT topics instead of the uniqueid or group id.
+Lights, groups and sensors can be given an alias, which is used in the MQTT topics instead of the uniqueid or group id.
 
 ```toml
 [alias.light]
@@ -67,11 +67,15 @@ LoungeLamp = "00:17:88:01:ab:cd:ef:01-02"
 
 [alias.group]
 Lounge = 3
+
+[alias.sensor]
+LoungeSwitch = "00:17:88:01:ab:cd:ef:01-02-fc00"
 ```
 
 The light is then published to `hue2mqtt/light/LoungeLamp` and controlled using `hue2mqtt/light/LoungeLamp/set`.
 The topics using the uniqueid or group id keep working, unless `publish_ids` is `false`.
-Lights and groups without an alias are always published by their id.
+Sensors are published to `hue2mqtt/sensor/LoungeSwitch` accordingly.
+Lights, groups and sensors without an alias are always published by their id.
 
 An alias must not contain whitespace, `/`, `+`, `#` or `$`.
 

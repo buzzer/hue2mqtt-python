@@ -50,12 +50,14 @@ def _section(
 def render_aliases(
     lights: Iterable[Tuple[str, str]],
     groups: Iterable[Tuple[str, str, str]],
+    sensors: Iterable[Tuple[str, str]] = (),
 ) -> str:
     """
     Render the alias section of the config file.
 
     :param lights: name and uniqueid of every light.
     :param groups: name, id and type of every group.
+    :param sensors: name and uniqueid of every sensor.
     """
     light_entries = [
         (sanitise_alias(name), f'"{uniqueid}"', "") for name, uniqueid in lights
@@ -71,4 +73,10 @@ def render_aliases(
     lines = _section("[alias.light]", light_entries)
     lines.append("")
     lines.extend(_section("[alias.group]", group_entries))
+    sensor_entries = [
+        (sanitise_alias(name), f'"{uniqueid}"', "") for name, uniqueid in sensors
+    ]
+    if sensor_entries:
+        lines.append("")
+        lines.extend(_section("[alias.sensor]", sensor_entries))
     return "\n".join(lines) + "\n"

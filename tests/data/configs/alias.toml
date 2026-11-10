@@ -16,5 +16,8 @@ Desk = "00:17:88:01:00:00:00:02-0b"
 LivingRoom = 1
 Bath = "10"
 
+[alias.sensor]
+Switch = "00:17:88:01:00:00:00:07-02-fc00"
+
 [watchdog]
 max_runtime_hours = 48

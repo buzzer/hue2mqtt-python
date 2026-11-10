@@ -37,6 +37,7 @@ def test_alias_config() -> None:
     assert config.alias.light["Ceiling"] == "00:17:88:01:00:00:00:01-0b"
     # Group ids may be given as integers or strings
     assert config.alias.group == {"LivingRoom": "1", "Bath": "10"}
+    assert config.alias.sensor == {"Switch": "00:17:88:01:00:00:00:07-02-fc00"}
     assert config.mqtt.client_id == "hue2mqtt-test"
     assert config.watchdog.max_runtime_hours == 48
 

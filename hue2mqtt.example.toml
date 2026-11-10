@@ -21,6 +21,9 @@ username = "some secret here"
 #
 # [alias.group]
 # Lounge = 3
+#
+# [alias.sensor]
+# LoungeSwitch = "00:17:88:01:ab:cd:ef:01-02-fc00"
 
 # Optional: exit, so that a supervisor can restart Hue2MQTT.
 # [watchdog]

@@ -74,12 +74,14 @@ def _check_aliases(aliases: Dict[str, str], kind: str) -> None:
 
 
 class AliasInfo(BaseModel):
-    """Human readable names for lights and groups, used in MQTT topics."""
+    """Human readable names for lights, groups and sensors, used in MQTT topics."""
 
     # alias -> light uniqueid
     light: Dict[str, str] = {}
     # alias -> group id
     group: Dict[str, str] = {}
+    # alias -> sensor uniqueid
+    sensor: Dict[str, str] = {}
 
     class Config:
         """Pydantic config."""
@@ -104,6 +106,11 @@ class AliasInfo(BaseModel):
     @validator("group")
     def _check_group(cls, value: Dict[str, str]) -> Dict[str, str]:
         _check_aliases(value, "group")
+        return value
+
+    @validator("sensor")
+    def _check_sensor(cls, value: Dict[str, str]) -> Dict[str, str]:
+        _check_aliases(value, "sensor")
         return value
 
 

@@ -9,7 +9,7 @@ import pytest
 from pydantic import BaseModel
 
 from hue2mqtt.hue2mqtt import Hue2MQTT
-from hue2mqtt.schema import GroupInfo, LightInfo
+from hue2mqtt.schema import GroupInfo, LightInfo, SensorInfo
 
 DATA_DIR = Path(__file__).resolve().parent.joinpath("data/configs")
 
@@ -280,3 +280,39 @@ async def test_main_exits_when_watchdog_fires() -> None:
     app._watchdog = fast_watchdog  # type: ignore[method-assign]
     await asyncio.wait_for(app.main(None), 1)  # type: ignore[arg-type]
     assert app.exit_code == 1
+
+
+SWITCH = "00:17:88:01:00:00:00:07-02-fc00"
+
+
+def make_sensor(uniqueid: str) -> SensorInfo:
+    """Create a sensor as published to MQTT."""
+    return SensorInfo.parse_obj(
+        {
+            "id": 7,
+            "name": "Switch",
+            "type": "ZLLSwitch",
+            "modelid": "RWL021",
+            "manufacturername": "Signify",
+            "productname": "Hue dimmer switch",
+            "uniqueid": uniqueid,
+            "swversion": "1.0",
+            "state": {"lastupdated": "none", "buttonevent": 4002},
+            "capabilities": {},
+        },
+    )
+
+
+def test_publish_sensor_alias_and_id() -> None:
+    """Test that an aliased sensor is published on both topics."""
+    app, mqtt, _ = make_app()
+    app.publish_sensor(make_sensor(SWITCH))
+    assert mqtt.published == [("sensor/Switch", True), (f"sensor/{SWITCH}", True)]
+
+
+def test_publish_sensor_alias_only() -> None:
+    """Test that the id topic of a sensor can be turned off."""
+    app, mqtt, _ = make_app(publish_ids=False)
+    app.publish_sensor(make_sensor(SWITCH))
+    app.publish_sensor(make_sensor("00:17:88:01:00:00:00:08-02-fc00"))
+    assert mqtt.topics == ["sensor/Switch", "sensor/00:17:88:01:00:00:00:08-02-fc00"]

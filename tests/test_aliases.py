@@ -74,3 +74,21 @@ def test_render_aliases_unusable_name() -> None:
     lines = render_aliases([("  ", "00:17:88:01:00:00:00:01-0b")], []).splitlines()
     assert lines[1].startswith("# ")
     assert lines[1].endswith("# no usable name")
+
+
+def test_render_aliases_sensors() -> None:
+    """Test that sensors get their own section."""
+    sensors = [("Schalter KZ", "00:17:88:01:00:00:00:07-02-fc00")]
+    rendered = render_aliases(LIGHTS, GROUPS, sensors)
+    assert rendered.splitlines()[-3:] == [
+        "",
+        "[alias.sensor]",
+        'Schalter_KZ = "00:17:88:01:00:00:00:07-02-fc00"',
+    ]
+    alias = AliasInfo(**tomllib.loads(rendered)["alias"])
+    assert alias.sensor == {"Schalter_KZ": "00:17:88:01:00:00:00:07-02-fc00"}
+
+
+def test_render_aliases_without_sensors() -> None:
+    """Test that the sensor section is left out if there are no sensors."""
+    assert "[alias.sensor]" not in render_aliases(LIGHTS, GROUPS)
