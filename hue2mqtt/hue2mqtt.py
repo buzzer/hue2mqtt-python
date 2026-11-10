@@ -151,7 +151,9 @@ class Hue2MQTT:
         else:
             message = Hue2MQTTStatus(online=online)
 
-        self._mqtt.publish("status", message)
+        # Retained like the last will, otherwise the last will of an earlier
+        # run would be the only status that new subscribers get to see.
+        self._mqtt.publish("status", message, retain=True)
 
     def _topic_names(self, ident: str, aliases: Dict[str, str]) -> List[str]:
         """Get the topic levels that an object is published on."""
