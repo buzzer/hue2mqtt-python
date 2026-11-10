@@ -10,9 +10,10 @@ import json
 import logging
 import signal
 import sys
+import time
 from signal import SIGHUP, SIGINT, SIGTERM
 from types import FrameType
-from typing import Match, Optional
+from typing import Any, Dict, List, Match, Optional, Tuple
 
 import aiohue
 from aiohttp.client import ClientSession
@@ -28,6 +29,7 @@ from hue2mqtt.schema import (
     SensorInfo,
 )
 
+from .aliases import render_aliases
 from .config import Hue2MQTTConfig
 from .mqtt.wrapper import MQTTWrapper
 
@@ -47,11 +49,17 @@ class Hue2MQTT:
         config_file: Optional[str],
         *,
         name: str = "hue2mqtt",
+        welcome_message: bool = True,
     ) -> None:
         self.config = Hue2MQTTConfig.load(config_file)
         self.name = name
+        self.exit_code = 0
 
-        self._setup_logging(verbose)
+        # Reverse lookup: uniqueid / group id -> alias
+        self._light_alias = {v: k for k, v in self.config.alias.light.items()}
+        self._group_alias = {v: k for k, v in self.config.alias.group.items()}
+
+        self._setup_logging(verbose, welcome_message=welcome_message)
         self._setup_event_loop()
         self._setup_mqtt()
 
@@ -82,7 +90,7 @@ class Hue2MQTT:
 
     def _setup_mqtt(self) -> None:
         self._mqtt = MQTTWrapper(
-            self.name,
+            self.config.mqtt.client_id,
             self.config.mqtt,
             last_will=Hue2MQTTStatus(online=False),
         )
@@ -108,9 +116,10 @@ class Hue2MQTT:
             await self._publish_bridge_status()
             await self.main(websession)
 
-        LOGGER.info("Disconnecting from MQTT Broker")
-        await self._publish_bridge_status(online=False)
-        await self._mqtt.disconnect()
+        if self._mqtt.is_connected:
+            LOGGER.info("Disconnecting from MQTT Broker")
+            await self._publish_bridge_status(online=False)
+            await self._mqtt.disconnect()
 
     def halt(self) -> None:
         """Stop the component."""
@@ -144,13 +153,24 @@ class Hue2MQTT:
 
         self._mqtt.publish("status", message)
 
+    def _topic_names(self, ident: str, aliases: Dict[str, str]) -> List[str]:
+        """Get the topic levels that an object is published on."""
+        names = []
+        if ident in aliases:
+            names.append(aliases[ident])
+        if self.config.mqtt.publish_ids or not names:
+            names.append(ident)
+        return names
+
     def publish_light(self, light: LightInfo) -> None:
         """Publish information about a light to MQTT."""
-        self._mqtt.publish(f"light/{light.uniqueid}", light, retain=True)
+        for name in self._topic_names(light.uniqueid, self._light_alias):
+            self._mqtt.publish(f"light/{name}", light, retain=True)
 
     def publish_group(self, group: GroupInfo) -> None:
         """Publish information about a group to MQTT."""
-        self._mqtt.publish(f"group/{group.id}", group, retain=True)
+        for name in self._topic_names(str(group.id), self._group_alias):
+            self._mqtt.publish(f"group/{name}", group, retain=True)
 
     def publish_sensor(self, sensor: SensorInfo) -> None:
         """Publish information about a group to MQTT."""
@@ -158,7 +178,8 @@ class Hue2MQTT:
 
     async def handle_set_light(self, match: Match[str], payload: str) -> None:
         """Handle an update to a light."""
-        uniqueid = match.group(1)
+        name = match.group(1)
+        uniqueid = self.config.alias.light.get(name, name)
 
         # Find the light with that uniqueid
         for light_id in self._bridge.lights:
@@ -179,14 +200,15 @@ class Hue2MQTT:
 
     async def handle_set_group(self, match: Match[str], payload: str) -> None:
         """Handle an update to a group."""
-        groupid = match.group(1)
+        name = match.group(1)
+        groupid = self.config.alias.group.get(name, name)
 
         try:
             group = self._bridge.groups[groupid]
             state = parse_obj_as(GroupSetState, json.loads(payload))
             LOGGER.info(f"Updating group {group.name}")
             await group.set_action(**state.dict())
-        except IndexError:
+        except (IndexError, KeyError):
             LOGGER.warning(f"Unknown group id: {groupid}")
         except json.JSONDecodeError:
             LOGGER.warning(f"Bad JSON on light request: {payload}")
@@ -215,19 +237,73 @@ class Hue2MQTT:
             else:
                 LOGGER.debug(f"Ignoring virtual sensor: {sensor_raw.name}")
 
-        # Publish updates
-        try:
-            async for updated_object in self._bridge.listen_events():
-                if isinstance(updated_object, aiohue.groups.Group):
-                    group = GroupInfo(id=updated_object.id, **updated_object.raw)
-                    self.publish_group(group)
-                elif isinstance(updated_object, aiohue.lights.Light):
-                    light = LightInfo(id=updated_object.id, **updated_object.raw)
-                    self.publish_light(light)
-                elif isinstance(updated_object, aiohue.sensors.GenericSensor):
-                    sensor = SensorInfo(id=updated_object.id, **updated_object.raw)
-                    self.publish_sensor(sensor)
-                else:
-                    LOGGER.warning("Unknown object")
-        except GeneratorExit:
-            LOGGER.warning("Exited loop")
+        # Publish updates until the event stream ends or the watchdog fires.
+        # Either way we exit with an error, so that a supervisor restarts us.
+        tasks = [
+            asyncio.ensure_future(self._publish_updates()),
+            asyncio.ensure_future(self._watchdog()),
+        ]
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        self.exit_code = 1
+        for task in done:
+            task.result()
+
+    async def _publish_updates(self) -> None:
+        """Publish updates from the event stream of the bridge."""
+        async for updated_object in self._bridge.listen_events():
+            if isinstance(updated_object, aiohue.groups.Group):
+                group = GroupInfo(id=updated_object.id, **updated_object.raw)
+                self.publish_group(group)
+            elif isinstance(updated_object, aiohue.lights.Light):
+                light = LightInfo(id=updated_object.id, **updated_object.raw)
+                self.publish_light(light)
+            elif isinstance(updated_object, aiohue.sensors.GenericSensor):
+                sensor = SensorInfo(id=updated_object.id, **updated_object.raw)
+                self.publish_sensor(sensor)
+            else:
+                LOGGER.warning("Unknown object")
+        LOGGER.error("Event stream of the Hue Bridge ended")
+
+    async def _watchdog(self, *, interval: float = 5) -> None:
+        """Return when Hue2MQTT should be restarted."""
+        config = self.config.watchdog
+        started = time.monotonic()
+        disconnected_since: Optional[float] = None
+        while True:
+            await asyncio.sleep(interval)
+            now = time.monotonic()
+
+            if config.max_runtime_hours is not None:
+                if now - started >= config.max_runtime_hours * 3600:
+                    LOGGER.warning("Maximum runtime reached, exiting")
+                    return
+
+            if self._mqtt.is_connected:
+                disconnected_since = None
+            elif disconnected_since is None:
+                LOGGER.warning("Lost connection to MQTT Broker")
+                disconnected_since = now
+            elif now - disconnected_since >= config.mqtt_disconnect_timeout:
+                LOGGER.error("MQTT Broker unreachable, exiting")
+                return
+
+    async def print_aliases(self) -> None:
+        """Print an alias config section with the names stored on the bridge."""
+        async with ClientSession() as websession:
+            await self._setup_bridge(websession)
+            lights: List[Tuple[str, str]] = [
+                (light.name, light.uniqueid) for light in self._iter(self._bridge.lights)
+            ]
+            groups: List[Tuple[str, str, str]] = [
+                (group.name, str(group.id), str(group.raw.get("type", "")))
+                for group in self._iter(self._bridge.groups)
+            ]
+        print(render_aliases(lights, groups), end="")  # noqa: T201
+
+    @staticmethod
+    def _iter(items: Any) -> List[Any]:
+        """Get the objects of an aiohue collection, ordered by id."""
+        return [items[key] for key in sorted(items._items, key=lambda k: int(k))]

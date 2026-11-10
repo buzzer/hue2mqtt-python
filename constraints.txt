@@ -1,0 +1,7 @@
+# Versions that Hue2MQTT is tested with, taken from poetry.lock.
+# Used to build the container image.
+aiohttp==3.9.1
+aiohue==2.6.3
+click==8.1.7
+gmqtt==0.6.13
+pydantic==1.10.13

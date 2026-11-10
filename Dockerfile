@@ -1,15 +1,15 @@
-# syntax = docker/dockerfile:1.0-experimental
-
 FROM python:3.11-slim
 
-RUN pip install --upgrade pip
+ENV PYTHONUNBUFFERED=1
 
 COPY . /hue2mqtt-python
 
 WORKDIR /hue2mqtt-python
 
-RUN pip install .
+RUN pip install --no-cache-dir -c constraints.txt . \
+    && useradd --system --no-create-home hue2mqtt
 
-VOLUME [ "./hue2mqtt.toml" ]
+USER hue2mqtt
 
+# The config file is expected at /hue2mqtt-python/hue2mqtt.toml
 CMD ["hue2mqtt"]

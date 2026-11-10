@@ -12,6 +12,7 @@ Hue2MQTT lets you control your Hue setup using MQTT and publishes the current st
 - Receive live events (i.e button pushes, motion sensors) in real-time.
 - No polling your Hue Bridge for changes
 - IPv6 Support
+- Optional human readable names (aliases) in MQTT topics
 
 ## Configuration
 
@@ -41,6 +42,42 @@ username = "some secret here"
 
 If you do not know the username for your bridge, find it using `hue2mqtt --discover`.
 
+Optional settings:
+
+```toml
+[mqtt]
+client_id = "hue2mqtt"  # MQTT client id, must be unique on the broker
+publish_ids = true      # set to false to publish aliased lights and groups by alias only
+
+[watchdog]
+max_runtime_hours = 48        # exit after this time, disabled by default
+mqtt_disconnect_timeout = 60  # exit if the broker is unreachable for this many seconds
+```
+
+Hue2MQTT exits with a non-zero exit code if the watchdog fires or the event stream of the bridge ends.
+Run it under a supervisor that restarts it, e.g. systemd or Docker with a restart policy.
+
+### Aliases
+
+Lights and groups can be given an alias, which is used in the MQTT topics instead of the uniqueid or group id.
+
+```toml
+[alias.light]
+LoungeLamp = "00:17:88:01:ab:cd:ef:01-02"
+
+[alias.group]
+Lounge = 3
+```
+
+The light is then published to `hue2mqtt/light/LoungeLamp` and controlled using `hue2mqtt/light/LoungeLamp/set`.
+The topics using the uniqueid or group id keep working, unless `publish_ids` is `false`.
+Lights and groups without an alias are always published by their id.
+
+An alias must not contain whitespace, `/`, `+`, `#` or `$`.
+
+`hue2mqtt --print-aliases` prints an alias section with the names that are stored on the bridge.
+Copy it to your config file. The aliases are then independent of the names in the Hue app.
+
 ## Running Hue2MQTT
 
 Usually, it is as simple as running `hue2mqtt`.
@@ -54,6 +91,8 @@ Options:
   -v, --verbose
   -c, --config-file PATH
   --discover
+  --print-aliases         Print an alias config section with the names stored
+                          on the bridge.
   --help                  Show this message and exit.
 ```
 

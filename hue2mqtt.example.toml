@@ -13,3 +13,16 @@ topic_prefix = "hue2mqtt"
 [hue]
 ip = "192.0.2.2"
 username = "some secret here"
+
+# Optional: human readable names in MQTT topics.
+# Generate this section using: hue2mqtt --print-aliases
+# [alias.light]
+# LoungeLamp = "00:17:88:01:ab:cd:ef:01-02"
+#
+# [alias.group]
+# Lounge = 3
+
+# Optional: exit, so that a supervisor can restart Hue2MQTT.
+# [watchdog]
+# max_runtime_hours = 48
+# mqtt_disconnect_timeout = 60

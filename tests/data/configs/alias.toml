@@ -1,0 +1,20 @@
+[mqtt]
+host = "::1"
+port = 1883
+force_protocol_version_3_1 = true
+client_id = "hue2mqtt-test"
+
+[hue]
+ip = "192.168.1.100"
+username = "foo"
+
+[alias.light]
+Ceiling = "00:17:88:01:00:00:00:01-0b"
+Desk = "00:17:88:01:00:00:00:02-0b"
+
+[alias.group]
+LivingRoom = 1
+Bath = "10"
+
+[watchdog]
+max_runtime_hours = 48
