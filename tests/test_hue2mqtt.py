@@ -316,3 +316,15 @@ def test_publish_sensor_alias_only() -> None:
     app.publish_sensor(make_sensor(SWITCH))
     app.publish_sensor(make_sensor("00:17:88:01:00:00:00:08-02-fc00"))
     assert mqtt.topics == ["sensor/Switch", "sensor/00:17:88:01:00:00:00:08-02-fc00"]
+
+
+def test_publish_group_ignored_type() -> None:
+    """Test that groups of an ignored type are not published."""
+    app, mqtt, _ = make_app()
+    app.config.hue.ignore_group_types = ["Room"]
+    app.publish_group(make_group(1))
+    assert mqtt.topics == []
+
+    app.config.hue.ignore_group_types = ["LightGroup"]
+    app.publish_group(make_group(1))
+    assert mqtt.topics == ["group/LivingRoom", "group/1"]

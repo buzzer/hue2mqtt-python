@@ -172,11 +172,14 @@ class Hue2MQTT:
 
     def publish_group(self, group: GroupInfo) -> None:
         """Publish information about a group to MQTT."""
+        if group.type in self.config.hue.ignore_group_types:
+            LOGGER.debug(f"Ignoring group of type {group.type}: {group.name}")
+            return
         for name in self._topic_names(str(group.id), self._group_alias):
             self._mqtt.publish(f"group/{name}", group, retain=True)
 
     def publish_sensor(self, sensor: SensorInfo) -> None:
-        """Publish information about a group to MQTT."""
+        """Publish information about a sensor to MQTT."""
         for name in self._topic_names(sensor.uniqueid, self._sensor_alias):
             self._mqtt.publish(f"sensor/{name}", sensor, retain=True)
 

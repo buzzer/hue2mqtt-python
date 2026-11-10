@@ -5,7 +5,7 @@ Common to all components.
 """
 import re
 from pathlib import Path
-from typing import IO, Dict, Optional
+from typing import IO, Dict, List, Optional
 
 from pydantic import BaseModel, parse_obj_as, validator
 
@@ -25,6 +25,9 @@ class HueBridgeInfo(BaseModel):
 
     ip: str
     username: str
+    # Group types that are not published, e.g. "LightGroup" for the groups
+    # that the bridge creates on its own. They can still be controlled.
+    ignore_group_types: List[str] = []
 
     class Config:
         """Pydantic config."""

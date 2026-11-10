@@ -49,10 +49,16 @@ Optional settings:
 client_id = "hue2mqtt"  # MQTT client id, must be unique on the broker
 publish_ids = true      # set to false to publish aliased lights and groups by alias only
 
+[hue]
+ignore_group_types = ["LightGroup"]  # do not publish groups of these types
+
 [watchdog]
 max_runtime_hours = 48        # exit after this time, disabled by default
 mqtt_disconnect_timeout = 60  # exit if the broker is unreachable for this many seconds
 ```
+
+Groups of type `LightGroup` are created by the bridge on its own, e.g. for switches.
+Rooms and zones have the types `Room` and `Zone`.
 
 Hue2MQTT exits with a non-zero exit code if the watchdog fires or the event stream of the bridge ends.
 Run it under a supervisor that restarts it, e.g. systemd or Docker with a restart policy.
