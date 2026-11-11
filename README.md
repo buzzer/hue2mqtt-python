@@ -2,6 +2,18 @@
 
 Python Hue to MQTT Bridge
 
+> This is a fork of [trickeydan/hue2mqtt-python](https://github.com/trickeydan/hue2mqtt-python).
+> It adds:
+>
+> - [aliases](#aliases): human readable names for lights, groups and sensors in MQTT topics
+> - a watchdog that exits when the MQTT broker is gone, so that a supervisor can restart the bridge.
+>   The original keeps running without a broker connection after one failed reconnect.
+> - the online status as a retained message, a configurable MQTT client id
+>   and an option to hide groups that the bridge creates on its own
+>
+> The `hue2mqtt` package on PyPI is the original and does not have these features.
+> See [Installation](#installation).
+
 ## What and Why?
 
 Hue2MQTT lets you control your Hue setup using MQTT and publishes the current state in real-time.
@@ -13,6 +25,16 @@ Hue2MQTT lets you control your Hue setup using MQTT and publishes the current st
 - No polling your Hue Bridge for changes
 - IPv6 Support
 - Optional human readable names (aliases) in MQTT topics
+
+## Installation
+
+Install from this repository, the package on PyPI is the original:
+
+```
+pip install git+https://github.com/buzzer/hue2mqtt-python.git
+```
+
+Or run it as a container, see [Docker](#docker).
 
 ## Configuration
 
@@ -125,6 +147,7 @@ Information about the state of Hue is published to MQTT as retained messages. Me
 ### Lights
 
 Information about lights is published to `hue2mqtt/light/{{UNIQUEID}}` where `UNIQUEID` is the Zigbee MAC of the light.
+A light with an [alias](#aliases) is also published to `hue2mqtt/light/{{ALIAS}}`.
 
 e.g `hue2mqtt/light/00:17:88:01:ab:cd:ef:01-02`
 
@@ -138,6 +161,8 @@ e.g `hue2mqtt/light/00:17:88:01:ab:cd:ef:01-02`
 A group represents a group of lights, referred to as Rooms and Zones in the Hue app.
 
 Information about lights is published to `hue2mqtt/group/{{GROUPID}}` where `GROUPID` is an integer.
+A group with an [alias](#aliases) is also published to `hue2mqtt/group/{{ALIAS}}`.
+Groups can be hidden by type using `ignore_group_types`.
 
 ```json
 hue2mqtt/group/3 {"id": 3, "name": "Lounge", "lights": [24, 21, 20, 3, 5], "sensors": [], "type": "Room", "state": {"all_on": false, "any_on": false}, "group_class": "Living room", "action": {"on": false, "alert": "none", "bri": 153, "ct": 497, "effect": "none", "hue": 7170, "sat": 225, "xy": [0, 0], "transitiontime": null, "reachable": null, "color_mode": null, "mode": null}}
@@ -148,6 +173,7 @@ hue2mqtt/group/3 {"id": 3, "name": "Lounge", "lights": [24, 21, 20, 3, 5], "sens
 Sensors represent other objects in the Hue ecosystem, such as switches and motion sensors. There are also a number of "virtual" sensors that the Hue Hub uses to represent calculated values (e.g `daylight`), but these are ignored by Hue2MQTT.
 
 Information about sensors is published to `hue2mqtt/sensor/{{UNIQUEID}}` where `UNIQUEID` is the Zigbee MAC of the device.
+A sensor with an [alias](#aliases) is also published to `hue2mqtt/sensor/{{ALIAS}}`.
 
 e.g `hue2mqtt/sensor/00:17:88:01:ab:cd:ef:01-02`
 
@@ -166,6 +192,8 @@ e.g `hue2mqtt/sensor/00:17:88:01:ab:cd:ef:01-02`
 ## Controlling Hue
 
 Lights and Groups can be controlled by publishing objects to the `hue2mqtt/light/{{UNIQUEID}}/set` or `hue2mqtt/group/{{GROUPID}}/set` topics.
+An [alias](#aliases) can be used in place of the `UNIQUEID` or `GROUPID`. Both forms are always accepted,
+also if `publish_ids` is `false` or the group is hidden.
 
 The object should be a JSON object containing the state values that you wish to change.
 
@@ -175,7 +203,20 @@ The object should be a JSON object containing the state values that you wish to 
 
 ## Docker
 
-Included is a basic Dockerfile and docker-compose example. 
+Included is a Dockerfile and a docker-compose example. The image is built locally, it is not published to a registry.
+
+```
+cp hue2mqtt.example.toml hue2mqtt.toml   # then edit it
+docker compose up -d --build
+docker compose run --rm hue2mqtt hue2mqtt --print-aliases
+```
+
+- The config file is mounted read-only to `/hue2mqtt-python/hue2mqtt.toml`.
+- The container runs as an unprivileged user, which has to be able to read the config file.
+  The file contains the key for your Hue Bridge. To keep it readable by its owner only,
+  run the container as that user, e.g. `user: "1000:1000"` in `docker-compose.yml`.
+- The restart policy restarts Hue2MQTT when the watchdog exits.
+- The image installs the dependency versions listed in `constraints.txt`.
 
 ### Connections to Docker Host
 
