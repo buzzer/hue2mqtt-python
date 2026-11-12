@@ -47,8 +47,8 @@ class MQTTBrokerInfo(BaseModel):
     topic_prefix: str = "hue2mqtt"
     force_protocol_version_3_1: bool = False
     client_id: str = "hue2mqtt"
-    # Publish on the uniqueid / group id topics. Aliased topics are always published.
-    publish_ids: bool = True
+    # Also publish aliased objects on the uniqueid / group id topics.
+    publish_ids: bool = False
 
     class Config:
         """Pydantic config."""

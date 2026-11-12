@@ -70,7 +70,7 @@ Optional settings:
 ```toml
 [mqtt]
 client_id = "hue2mqtt"  # MQTT client id, must be unique on the broker
-publish_ids = true      # set to false to publish aliased lights and groups by alias only
+publish_ids = false     # set to true to also publish aliased lights and groups by their id
 
 [hue]
 ignore_group_types = ["LightGroup"]  # do not publish groups of these types
@@ -102,7 +102,7 @@ LoungeSwitch = "00:17:88:01:ab:cd:ef:01-02-fc00"
 ```
 
 The light is then published to `hue2mqtt/light/LoungeLamp` and controlled using `hue2mqtt/light/LoungeLamp/set`.
-The topics using the uniqueid or group id keep working, unless `publish_ids` is `false`.
+The topics using the uniqueid or group id are not published for aliased objects, unless `publish_ids` is `true`.
 Sensors are published to `hue2mqtt/sensor/LoungeSwitch` accordingly.
 Lights, groups and sensors without an alias are always published by their id.
 

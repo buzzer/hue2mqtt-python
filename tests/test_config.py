@@ -25,7 +25,7 @@ def test_defaults_without_alias() -> None:
     assert config.alias.light == {}
     assert config.alias.group == {}
     assert config.mqtt.client_id == "hue2mqtt"
-    assert config.mqtt.publish_ids
+    assert not config.mqtt.publish_ids
     assert config.watchdog.max_runtime_hours is None
     assert config.watchdog.mqtt_disconnect_timeout == 60
 
