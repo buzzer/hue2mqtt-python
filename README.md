@@ -226,3 +226,15 @@ To establish a MQTT-Connection to the Docker Host (localhost is the docker insta
 ```toml
 host = "host.docker.internal"
 ```
+
+## Development
+
+The tests of the MQTT wrapper need a broker on `localhost:1883`.
+Without one they fail with timeouts. `make broker-start` runs a throwaway
+Mosquitto in Docker, `make broker-stop` removes it again:
+
+```bash
+make broker-start
+make test
+make broker-stop
+```
