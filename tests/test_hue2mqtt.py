@@ -1,9 +1,10 @@
 """Test topic handling and the watchdog of the bridge."""
 
 import asyncio
+import json
 import re
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, List, Match, Tuple
+from typing import Any, AsyncIterator, Dict, List, Match, Optional, Tuple
 
 import pytest
 from pydantic import BaseModel
@@ -23,10 +24,12 @@ class FakeMQTT:
     def __init__(self) -> None:
         self.is_connected = True
         self.published: List[Tuple[str, bool]] = []
+        self.payloads: List[Dict[str, Any]] = []
 
     def publish(self, topic: str, payload: BaseModel, *, retain: bool = False) -> None:
         """Record a message."""
         self.published.append((topic, retain))
+        self.payloads.append(json.loads(payload.json(by_alias=True, exclude_none=True)))
 
     @property
     def topics(self) -> List[str]:
@@ -83,14 +86,14 @@ def make_app(*, publish_ids: bool = True) -> Tuple[Hue2MQTT, FakeMQTT, FakeBridg
     return app, mqtt, bridge
 
 
-def make_light(uniqueid: str) -> LightInfo:
+def make_light(uniqueid: str, state: Optional[Dict[str, Any]] = None) -> LightInfo:
     """Create a light as published to MQTT."""
     return LightInfo.parse_obj(
         {
             "id": 4,
             "name": "Ceiling",
             "uniqueid": uniqueid,
-            "state": {"on": True},
+            "state": state or {"on": True},
             "manufacturername": "Signify",
             "modelid": "LWB010",
             "productname": "Hue white lamp",
@@ -100,7 +103,7 @@ def make_light(uniqueid: str) -> LightInfo:
     )
 
 
-def make_group(group_id: int) -> GroupInfo:
+def make_group(group_id: int, action: Optional[Dict[str, Any]] = None) -> GroupInfo:
     """Create a group as published to MQTT."""
     return GroupInfo.parse_obj(
         {
@@ -110,7 +113,7 @@ def make_group(group_id: int) -> GroupInfo:
             "sensors": [],
             "type": "Room",
             "state": {"all_on": False, "any_on": True},
-            "action": {"on": True},
+            "action": action or {"on": True},
         },
     )
 
@@ -156,6 +159,32 @@ def test_publish_group() -> None:
     app.publish_group(make_group(1))
     app.publish_group(make_group(2))
     assert mqtt.topics == ["group/LivingRoom", "group/1", "group/2"]
+
+
+def test_publish_light_colormode() -> None:
+    """Test that the colormode reported by the bridge is published."""
+    app, mqtt, _ = make_app()
+    app.publish_light(
+        make_light(CEILING, {"on": True, "colormode": "ct", "ct": 347}),
+    )
+    state = mqtt.payloads[0]["state"]
+    assert state["colormode"] == "ct"
+    assert "color_mode" not in state
+
+
+def test_publish_light_without_colormode() -> None:
+    """Test that the colormode is omitted for lights that do not report it."""
+    app, mqtt, _ = make_app()
+    app.publish_light(make_light(CEILING))
+    assert "colormode" not in mqtt.payloads[0]["state"]
+    assert "color_mode" not in mqtt.payloads[0]["state"]
+
+
+def test_publish_group_colormode() -> None:
+    """Test that the colormode of a group action is published."""
+    app, mqtt, _ = make_app()
+    app.publish_group(make_group(1, {"on": True, "colormode": "hs"}))
+    assert mqtt.payloads[0]["action"]["colormode"] == "hs"
 
 
 @pytest.mark.asyncio

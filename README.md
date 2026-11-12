@@ -10,6 +10,7 @@ Python Hue to MQTT Bridge
 >   The original keeps running without a broker connection after one failed reconnect.
 > - the online status as a retained message, a configurable MQTT client id
 >   and an option to hide groups that the bridge creates on its own
+> - `colormode` of colour lights is published (upstream drops it because of a naming mistake)
 >
 > The `hue2mqtt` package on PyPI is the original and does not have these features.
 > See [Installation](#installation).
