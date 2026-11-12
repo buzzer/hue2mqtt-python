@@ -39,7 +39,7 @@ class LightState(LightBaseState):
     """The State of a light that we can read."""
 
     reachable: Optional[bool]
-    color_mode: Optional[str]
+    color_mode: Optional[str] = Field(default=None, alias="colormode")
     mode: Optional[str]
 
 
