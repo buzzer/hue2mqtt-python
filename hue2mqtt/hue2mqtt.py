@@ -16,6 +16,7 @@ from types import FrameType
 from typing import Any, Dict, List, Match, Optional, Tuple
 
 import aiohue
+from aiohttp import ClientError
 from aiohttp.client import ClientSession
 from pydantic import ValidationError, parse_obj_as
 
@@ -249,6 +250,7 @@ class Hue2MQTT:
         tasks = [
             asyncio.ensure_future(self._publish_updates()),
             asyncio.ensure_future(self._watchdog()),
+            asyncio.ensure_future(self._stale_watchdog()),
         ]
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
@@ -296,6 +298,59 @@ class Hue2MQTT:
             elif now - disconnected_since >= config.mqtt_disconnect_timeout:
                 LOGGER.error("MQTT Broker unreachable, exiting")
                 return
+
+    async def _stale_watchdog(self, *, interval: Optional[float] = None) -> None:
+        """Return when the event stream has been out of sync with the bridge."""
+        config = self.config.watchdog
+        timeout = config.stale_timeout
+        if timeout is None:
+            await asyncio.Event().wait()
+            return
+        if interval is None:
+            interval = config.stale_check_interval
+        out_of_sync_since: Optional[float] = None
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                stale = await asyncio.wait_for(self._find_stale(), max(interval, 10))
+            except (
+                asyncio.TimeoutError,
+                ClientError,
+                aiohue.errors.AiohueException,
+            ) as e:
+                # Cannot tell, so keep the state of the last check.
+                LOGGER.warning(f"Could not check the Hue Bridge for stale state: {e!r}")
+                continue
+
+            now = time.monotonic()
+            if not stale:
+                out_of_sync_since = None
+                continue
+            if out_of_sync_since is None:
+                LOGGER.warning(f"State differs from the bridge: {', '.join(stale)}")
+                out_of_sync_since = now
+            elif now - out_of_sync_since >= timeout:
+                LOGGER.error("Event stream of the Hue Bridge is stale, exiting")
+                return
+
+    async def _find_stale(self) -> List[str]:
+        """Get the lights and groups whose on state differs from the bridge."""
+        stale = []
+        lights = await self._bridge.request("get", "lights")
+        for ident, raw in lights.items():
+            known = self._bridge.lights._items.get(ident)
+            if known is not None and known.raw["state"].get("on") != raw["state"].get(
+                "on"
+            ):
+                stale.append(f"light {known.name}")
+        groups = await self._bridge.request("get", "groups")
+        for ident, raw in groups.items():
+            known = self._bridge.groups._items.get(ident)
+            if known is not None and known.raw["action"].get("on") != raw["action"].get(
+                "on"
+            ):
+                stale.append(f"group {known.name}")
+        return stale
 
     async def print_aliases(self) -> None:
         """Print an alias config section with the names stored on the bridge."""

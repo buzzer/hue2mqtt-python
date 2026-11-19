@@ -29,3 +29,5 @@ username = "some secret here"
 # [watchdog]
 # max_runtime_hours = 48
 # mqtt_disconnect_timeout = 60
+# stale_check_interval = 60
+# stale_timeout = 180
