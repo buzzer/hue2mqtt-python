@@ -128,13 +128,24 @@ class WatchdogInfo(BaseModel):
     max_runtime_hours: Optional[float] = None
     # Exit if the MQTT broker has been unreachable for this many seconds.
     mqtt_disconnect_timeout: float = 60
+    # The event stream of the bridge can hang without ending. Therefore the
+    # on/off state received by events is compared with the state that the bridge
+    # reports on request, every stale_check_interval seconds. Exit if they have
+    # differed for stale_timeout seconds. Disabled if stale_timeout is not set.
+    stale_check_interval: float = 60
+    stale_timeout: Optional[float] = 180
 
     class Config:
         """Pydantic config."""
 
         extra = "forbid"
 
-    @validator("max_runtime_hours", "mqtt_disconnect_timeout")
+    @validator(
+        "max_runtime_hours",
+        "mqtt_disconnect_timeout",
+        "stale_check_interval",
+        "stale_timeout",
+    )
     def _check_positive(cls, value: Optional[float]) -> Optional[float]:
         if value is not None and value <= 0:
             raise ValueError("must be greater than zero")

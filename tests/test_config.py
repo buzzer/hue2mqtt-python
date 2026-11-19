@@ -28,6 +28,8 @@ def test_defaults_without_alias() -> None:
     assert not config.mqtt.publish_ids
     assert config.watchdog.max_runtime_hours is None
     assert config.watchdog.mqtt_disconnect_timeout == 60
+    assert config.watchdog.stale_check_interval == 60
+    assert config.watchdog.stale_timeout == 180
 
 
 def test_alias_config() -> None:
@@ -65,7 +67,15 @@ def test_alias_clashes_with_id() -> None:
         AliasInfo.parse_obj({"group": {"2": 1, "Bath": 2}})
 
 
-@pytest.mark.parametrize("field", ["max_runtime_hours", "mqtt_disconnect_timeout"])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "max_runtime_hours",
+        "mqtt_disconnect_timeout",
+        "stale_check_interval",
+        "stale_timeout",
+    ],
+)
 def test_watchdog_requires_positive(field: str) -> None:
     """Test that watchdog limits have to be greater than zero."""
     with pytest.raises(ValidationError):

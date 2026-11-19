@@ -357,3 +357,100 @@ def test_publish_group_ignored_type() -> None:
     app.config.hue.ignore_group_types = ["LightGroup"]
     app.publish_group(make_group(1))
     assert mqtt.topics == ["group/LivingRoom", "group/1"]
+
+
+class FakeStaleItem:
+    """A light or group as known from the events."""
+
+    def __init__(self, name: str, key: str, *, on: bool) -> None:
+        self.name = name
+        self.raw: Dict[str, Any] = {key: {"on": on}}
+
+
+class FakeStaleBridge:
+    """A bridge whose reported state can differ from the state of the events."""
+
+    def __init__(self) -> None:
+        self.lights = FakeCollection()
+        self.groups = FakeCollection()
+        self.lights._items = {"1": FakeStaleItem("Lamp", "state", on=True)}
+        self.groups._items = {"2": FakeStaleItem("Room", "action", on=True)}
+        self.reported: Dict[str, Any] = {}
+        self.fail = False
+        self.sync(light=True, group=True)
+
+    def sync(self, *, light: bool = True, group: bool = True) -> None:
+        """Report the given on states."""
+        self.reported = {
+            "lights": {"1": {"state": {"on": light}}},
+            "groups": {"2": {"action": {"on": group}}},
+        }
+
+    async def request(self, method: str, path: str) -> Dict[str, Any]:
+        """Return the state that the bridge reports."""
+        if self.fail:
+            raise asyncio.TimeoutError
+        return self.reported[path]  # type: ignore[no-any-return]
+
+
+def make_stale_app(timeout: Optional[float] = 0.05) -> Tuple[Hue2MQTT, FakeStaleBridge]:
+    """Create the app with a bridge to check for stale state."""
+    app, _, _ = make_app()
+    bridge = FakeStaleBridge()
+    app._bridge = bridge
+    app.config.watchdog.stale_timeout = timeout
+    return app, bridge
+
+
+@pytest.mark.asyncio
+async def test_stale_watchdog_in_sync() -> None:
+    """Test that nothing happens while the events match the bridge."""
+    app, _ = make_stale_app()
+    task = asyncio.ensure_future(app._stale_watchdog(interval=0.01))
+    await asyncio.sleep(0.15)
+    assert not task.done()
+    task.cancel()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("what", ["light", "group"])
+async def test_stale_watchdog_fires(what: str) -> None:
+    """Test that a lasting difference to the bridge fires the watchdog."""
+    app, bridge = make_stale_app()
+    bridge.sync(**{what: False})
+    await asyncio.wait_for(app._stale_watchdog(interval=0.01), 1)
+
+
+@pytest.mark.asyncio
+async def test_stale_watchdog_recovers() -> None:
+    """Test that a short difference, e.g. a race with an event, is ignored."""
+    app, bridge = make_stale_app(timeout=0.2)
+    task = asyncio.ensure_future(app._stale_watchdog(interval=0.01))
+    bridge.sync(light=False)
+    await asyncio.sleep(0.05)
+    bridge.sync(light=True, group=True)
+    await asyncio.sleep(0.4)
+    assert not task.done()
+    task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_stale_watchdog_ignores_unreachable_bridge() -> None:
+    """Test that failed requests alone do not fire the watchdog."""
+    app, bridge = make_stale_app()
+    bridge.fail = True
+    task = asyncio.ensure_future(app._stale_watchdog(interval=0.01))
+    await asyncio.sleep(0.15)
+    assert not task.done()
+    task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_stale_watchdog_disabled() -> None:
+    """Test that the watchdog does not run without a timeout."""
+    app, bridge = make_stale_app(timeout=None)
+    bridge.sync(light=False)
+    task = asyncio.ensure_future(app._stale_watchdog(interval=0.01))
+    await asyncio.sleep(0.15)
+    assert not task.done()
+    task.cancel()

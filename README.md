@@ -6,7 +6,7 @@ Python Hue to MQTT Bridge
 > It adds:
 >
 > - [aliases](#aliases): human readable names for lights, groups and sensors in MQTT topics
-> - a watchdog that exits when the MQTT broker is gone, so that a supervisor can restart the bridge.
+> - a watchdog that exits when the MQTT broker is gone or the event stream of the bridge is stale, so that a supervisor can restart the bridge.
 >   The original keeps running without a broker connection after one failed reconnect.
 > - the online status as a retained message, a configurable MQTT client id
 >   and an option to hide groups that the bridge creates on its own
@@ -78,7 +78,17 @@ ignore_group_types = ["LightGroup"]  # do not publish groups of these types
 [watchdog]
 max_runtime_hours = 48        # exit after this time, disabled by default
 mqtt_disconnect_timeout = 60  # exit if the broker is unreachable for this many seconds
+stale_check_interval = 60     # compare the state of the events with the bridge every n seconds
+stale_timeout = 180           # exit if they differ for this many seconds, unset to disable
 ```
+
+The event stream of the bridge can hang without ending, so that no updates are published anymore
+while the retained topics keep showing an old state.
+To detect that, the on/off state of all lights and groups that has been built from the events
+is compared with the state that the bridge reports on request.
+A short difference is normal, because the events and the request race.
+If it lasts for `stale_timeout` seconds, Hue2MQTT exits.
+Failed requests do not count as a difference.
 
 Groups of type `LightGroup` are created by the bridge on its own, e.g. for switches.
 Rooms and zones have the types `Room` and `Zone`.
