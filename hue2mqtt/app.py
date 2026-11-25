@@ -8,7 +8,17 @@ import click
 from .discovery import discover_bridge
 from .hue2mqtt import Hue2MQTT
 
-loop = asyncio.get_event_loop()
+
+async def _print_aliases(verbose: bool, config_file: Optional[str]) -> None:
+    hue2mqtt = Hue2MQTT(verbose, config_file, welcome_message=False)
+    await hue2mqtt.print_aliases()
+
+
+async def _run(verbose: bool, config_file: Optional[str]) -> int:
+    # Created in the running loop, as the MQTT client binds to it
+    hue2mqtt = Hue2MQTT(verbose, config_file)
+    await hue2mqtt.run()
+    return hue2mqtt.exit_code
 
 
 @click.command("hue2mqtt")
@@ -29,15 +39,11 @@ def app(
 ) -> None:
     """Main function for Hue2MQTT."""
     if discover:
-        loop.run_until_complete(discover_bridge())
+        asyncio.run(discover_bridge())
     elif print_aliases:
-        hue2mqtt = Hue2MQTT(verbose, config_file, welcome_message=False)
-        loop.run_until_complete(hue2mqtt.print_aliases())
+        asyncio.run(_print_aliases(verbose, config_file))
     else:
-        # Start application
-        hue2mqtt = Hue2MQTT(verbose, config_file)
-        loop.run_until_complete(hue2mqtt.run())
-        sys.exit(hue2mqtt.exit_code)
+        sys.exit(asyncio.run(_run(verbose, config_file)))
 
 
 if __name__ == "__main__":

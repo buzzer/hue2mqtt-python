@@ -2,10 +2,14 @@
 
 import asyncio
 import json
+import logging
+import os
 import re
+import signal
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Match, Optional, Tuple
 
+import aiohue
 import pytest
 from pydantic import BaseModel
 
@@ -26,6 +30,14 @@ class FakeMQTT:
         self.published: List[Tuple[str, bool]] = []
         self.payloads: List[Dict[str, Any]] = []
 
+    async def connect(self) -> None:
+        """Pretend to connect."""
+        self.is_connected = True
+
+    async def disconnect(self) -> None:
+        """Pretend to disconnect."""
+        self.is_connected = False
+
     def publish(self, topic: str, payload: BaseModel, *, retain: bool = False) -> None:
         """Record a message."""
         self.published.append((topic, retain))
@@ -44,14 +56,19 @@ class FakeItem:
         self.name = name
         self.uniqueid = uniqueid
         self.calls: List[Dict[str, Any]] = []
+        self.error: Optional[Exception] = None
 
     async def set_state(self, **kwargs: Any) -> None:
         """Record a state change of a light."""
         self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
 
     async def set_action(self, **kwargs: Any) -> None:
         """Record a state change of a group."""
         self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
 
 
 class FakeBridge:
@@ -65,19 +82,12 @@ class FakeBridge:
         self.groups = {"1": FakeItem("Living Room")}
 
 
-class App(Hue2MQTT):
-    """The app without signal handlers, which need the module level event loop."""
-
-    def _setup_event_loop(self) -> None:
-        pass
-
-
 CONFIG_FILE = str(DATA_DIR.joinpath("alias.toml"))
 
 
 def make_app(*, publish_ids: bool = True) -> Tuple[Hue2MQTT, FakeMQTT, FakeBridge]:
     """Create the app with a fake broker and bridge."""
-    app = App(verbose=False, config_file=CONFIG_FILE, welcome_message=False)
+    app = Hue2MQTT(verbose=False, config_file=CONFIG_FILE, welcome_message=False)
     app.config.mqtt.publish_ids = publish_ids
     mqtt = FakeMQTT()
     bridge = FakeBridge()
@@ -127,7 +137,7 @@ def match(name: str) -> Match[str]:
 
 def test_client_id_from_config() -> None:
     """Test that the MQTT client id is taken from the config."""
-    app = App(verbose=False, config_file=CONFIG_FILE, welcome_message=False)
+    app = Hue2MQTT(verbose=False, config_file=CONFIG_FILE, welcome_message=False)
     assert app._mqtt._client._client_id == "hue2mqtt-test"
 
 
@@ -217,6 +227,39 @@ async def test_set_unknown() -> None:
     await app.handle_set_group(match("Nope"), '{"on": true}')
     assert bridge.lights["4"].calls == []
     assert bridge.groups["1"].calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        aiohue.errors.AiohueException("201: parameter not modifiable"),
+        asyncio.TimeoutError(),
+    ],
+)
+async def test_set_bridge_error(
+    error: Exception,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test that an error of the bridge is logged instead of raised."""
+    app, _, bridge = make_app()
+    bridge.lights["4"].error = error
+    bridge.groups["1"].error = error
+    with caplog.at_level(logging.ERROR):
+        await app.handle_set_light(match("Ceiling"), '{"bri": 100}')
+        await app.handle_set_group(match("LivingRoom"), '{"bri": 100}')
+    assert "Could not update Ceiling" in caplog.text
+    assert "Could not update group Living Room" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_set_group_bad_payload(caplog: pytest.LogCaptureFixture) -> None:
+    """Test that the warnings about a bad group request name the group."""
+    app, _, _ = make_app()
+    await app.handle_set_group(match("LivingRoom"), "{")
+    await app.handle_set_group(match("LivingRoom"), '{"bri": "x"}')
+    assert "Bad JSON on group request" in caplog.text
+    assert "Invalid group state" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -454,3 +497,84 @@ async def test_stale_watchdog_disabled() -> None:
     await asyncio.sleep(0.15)
     assert not task.done()
     task.cancel()
+
+
+class FakeRunBridge(FakeEventBridge):
+    """A bridge for a full run, whose event stream never ends."""
+
+    class config:  # noqa: N801
+        name = "Bridge"
+        mac = "00:17:88:00:00:00"
+        apiversion = "1.0"
+
+
+def make_run_app(
+    bridge: Any, *, error: Optional[Exception] = None
+) -> Tuple[Hue2MQTT, FakeMQTT]:
+    """Create the app for a full run with a fake broker and bridge."""
+    app, mqtt, _ = make_app()
+    mqtt.is_connected = False
+    app.config.watchdog.stale_timeout = None
+
+    async def setup_bridge(websession: Any) -> None:
+        if error is not None:
+            raise error
+        app._bridge = bridge
+
+    app._setup_bridge = setup_bridge  # type: ignore[method-assign]
+    return app, mqtt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT, signal.SIGHUP])
+async def test_run_stops_on_signal(sig: signal.Signals) -> None:
+    """Test that a signal stops the run cleanly with exit code 0."""
+    app, mqtt = make_run_app(FakeRunBridge())
+    task = asyncio.ensure_future(app.run())
+    await asyncio.sleep(0.05)
+    assert not task.done()
+    assert mqtt.payloads[-1]["online"] is True
+
+    os.kill(os.getpid(), sig)
+    await asyncio.wait_for(task, 1)
+    assert app.exit_code == 0
+    assert mqtt.published[-1] == ("status", True)
+    assert mqtt.payloads[-1]["online"] is False
+    assert not mqtt.is_connected
+
+
+@pytest.mark.asyncio
+async def test_run_removes_signal_handlers() -> None:
+    """Test that the signal handlers are removed after the run."""
+    app, _ = make_run_app(FakeRunBridge())
+    task = asyncio.ensure_future(app.run())
+    await asyncio.sleep(0.05)
+    os.kill(os.getpid(), signal.SIGTERM)
+    await asyncio.wait_for(task, 1)
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+        assert not loop.remove_signal_handler(sig)
+
+
+@pytest.mark.asyncio
+async def test_run_cancelled_without_signal() -> None:
+    """Test that a cancellation from elsewhere still propagates after cleanup."""
+    app, mqtt = make_run_app(FakeRunBridge())
+    task = asyncio.ensure_future(app.run())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 1)
+    assert not mqtt.is_connected
+
+
+@pytest.mark.asyncio
+async def test_run_unauthorized() -> None:
+    """Test that a rejected username exits with an error after cleanup."""
+    app, mqtt = make_run_app(
+        FakeRunBridge(), error=aiohue.errors.Unauthorized("1: unauthorized user")
+    )
+    await asyncio.wait_for(app.run(), 1)
+    assert app.exit_code == 1
+    assert mqtt.payloads[-1]["online"] is False
+    assert not mqtt.is_connected
