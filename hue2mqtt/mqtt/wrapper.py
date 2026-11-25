@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Any, Callable, Coroutine, Dict, List, Match, Optional
+from typing import Any, Callable, Coroutine, Dict, List, Match, Optional, Set
 
 import gmqtt
 from pydantic import BaseModel
@@ -39,6 +39,8 @@ class MQTTWrapper:
         self._last_will = last_will
 
         self._topic_handlers: Dict[Topic, Handler] = {}
+        # Keep references, as the event loop only holds weak ones
+        self._handler_tasks: Set["asyncio.Task[None]"] = set()
 
         self._client = gmqtt.Client(
             self._client_name,
@@ -132,9 +134,20 @@ class MQTTWrapper:
             match = t.match(topic)
             if match:
                 LOGGER.debug(f"Calling {handler.__name__} to handle {topic}")
-                asyncio.ensure_future(handler(match, payload.decode()))
+                task = asyncio.ensure_future(handler(match, payload.decode()))
+                self._handler_tasks.add(task)
+                task.add_done_callback(self._handler_done)
 
         return gmqtt.constants.PubRecReasonCode.SUCCESS
+
+    def _handler_done(self, task: "asyncio.Task[None]") -> None:
+        """Forget a finished handler and log its error, if any."""
+        self._handler_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            LOGGER.error("Handler for an MQTT message failed", exc_info=exc)
 
     def publish(
         self,

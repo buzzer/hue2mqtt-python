@@ -8,11 +8,8 @@ and managing the event loop.
 import asyncio
 import json
 import logging
-import signal
-import sys
 import time
-from signal import SIGHUP, SIGINT, SIGTERM
-from types import FrameType
+from signal import SIGHUP, SIGINT, SIGTERM, Signals
 from typing import Any, Dict, List, Match, Optional, Tuple
 
 import aiohue
@@ -36,7 +33,11 @@ from .mqtt.wrapper import MQTTWrapper
 
 LOGGER = logging.getLogger(__name__)
 
-loop = asyncio.get_event_loop()
+# Errors of requests to the Hue Bridge
+BRIDGE_ERRORS = (asyncio.TimeoutError, ClientError, aiohue.errors.AiohueException)
+
+# Signals that stop Hue2MQTT cleanly
+STOP_SIGNALS = (SIGHUP, SIGINT, SIGTERM)
 
 
 class Hue2MQTT:
@@ -55,6 +56,7 @@ class Hue2MQTT:
         self.config = Hue2MQTTConfig.load(config_file)
         self.name = name
         self.exit_code = 0
+        self._stopped = False
 
         # Reverse lookup: uniqueid / group id -> alias
         self._light_alias = {v: k for k, v in self.config.alias.light.items()}
@@ -62,7 +64,6 @@ class Hue2MQTT:
         self._sensor_alias = {v: k for k, v in self.config.alias.sensor.items()}
 
         self._setup_logging(verbose, welcome_message=welcome_message)
-        self._setup_event_loop()
         self._setup_mqtt()
 
     def _setup_logging(self, verbose: bool, *, welcome_message: bool = True) -> None:
@@ -85,11 +86,6 @@ class Hue2MQTT:
         if welcome_message:
             LOGGER.info(f"Hue2MQTT v{__version__} - {self.__doc__}")
 
-    def _setup_event_loop(self) -> None:
-        loop.add_signal_handler(SIGHUP, self.halt)
-        loop.add_signal_handler(SIGINT, self.halt)
-        loop.add_signal_handler(SIGTERM, self.halt)
-
     def _setup_mqtt(self) -> None:
         self._mqtt = MQTTWrapper(
             self.config.mqtt.client_id,
@@ -100,11 +96,38 @@ class Hue2MQTT:
         self._mqtt.subscribe("light/+/set", self.handle_set_light)
         self._mqtt.subscribe("group/+/set", self.handle_set_group)
 
-    def _exit(self, signals: signal.Signals, frame_type: FrameType) -> None:
-        sys.exit(0)
-
     async def run(self) -> None:
-        """Entrypoint for the data component."""
+        """
+        Entrypoint for the data component.
+
+        Must be awaited in the event loop that the component was created in.
+        A stop signal cancels the run, which then disconnects cleanly and leaves
+        the exit code untouched.
+        """
+        loop = asyncio.get_running_loop()
+        task = asyncio.current_task()
+        assert task is not None
+        for sig in STOP_SIGNALS:
+            loop.add_signal_handler(sig, self._stop, sig, task)
+        try:
+            await self._run()
+        except asyncio.CancelledError:
+            if not self._stopped:
+                raise
+            LOGGER.info("Stopped")
+        finally:
+            for sig in STOP_SIGNALS:
+                loop.remove_signal_handler(sig)
+            await self._disconnect()
+
+    def _stop(self, sig: Signals, task: "asyncio.Task[None]") -> None:
+        """Stop the run on a signal."""
+        LOGGER.info(f"Received {sig.name}, stopping")
+        self._stopped = True
+        task.cancel()
+
+    async def _run(self) -> None:
+        """Connect to the broker and the bridge, and publish until stopped."""
         await self._mqtt.connect()
         LOGGER.info("Connected to MQTT Broker")
 
@@ -113,19 +136,17 @@ class Hue2MQTT:
                 await self._setup_bridge(websession)
             except aiohue.errors.Unauthorized:
                 LOGGER.error("Bridge rejected username. Please use --discover")
-                self.halt()
+                self.exit_code = 1
                 return
             await self._publish_bridge_status()
             await self.main(websession)
 
+    async def _disconnect(self) -> None:
+        """Publish the offline status and disconnect from the broker."""
         if self._mqtt.is_connected:
             LOGGER.info("Disconnecting from MQTT Broker")
             await self._publish_bridge_status(online=False)
             await self._mqtt.disconnect()
-
-    def halt(self) -> None:
-        """Stop the component."""
-        sys.exit(-1)
 
     async def _setup_bridge(self, websession: ClientSession) -> None:
         """Connect to the Hue Bridge."""
@@ -197,6 +218,8 @@ class Hue2MQTT:
                     state = parse_obj_as(LightSetState, json.loads(payload))
                     LOGGER.info(f"Updating {light.name}")
                     await light.set_state(**state.dict())
+                except BRIDGE_ERRORS as e:
+                    LOGGER.error(f"Could not update {light.name}: {e!r}")
                 except json.JSONDecodeError:
                     LOGGER.warning(f"Bad JSON on light request: {payload}")
                 except TypeError:
@@ -218,12 +241,14 @@ class Hue2MQTT:
             await group.set_action(**state.dict())
         except (IndexError, KeyError):
             LOGGER.warning(f"Unknown group id: {groupid}")
+        except BRIDGE_ERRORS as e:
+            LOGGER.error(f"Could not update group {group.name}: {e!r}")
         except json.JSONDecodeError:
-            LOGGER.warning(f"Bad JSON on light request: {payload}")
+            LOGGER.warning(f"Bad JSON on group request: {payload}")
         except TypeError:
             LOGGER.warning(f"Expected dictionary, got: {payload}")
         except ValidationError as e:
-            LOGGER.warning(f"Invalid light state: {e}")
+            LOGGER.warning(f"Invalid group state: {e}")
 
     async def main(self, websession: ClientSession) -> None:
         """Main method of the data component."""
@@ -252,10 +277,13 @@ class Hue2MQTT:
             asyncio.ensure_future(self._watchdog()),
             asyncio.ensure_future(self._stale_watchdog()),
         ]
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
-            task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
+        try:
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            # Also when we are cancelled, so that no task outlives us
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
         self.exit_code = 1
         for task in done:
             task.result()
@@ -313,11 +341,7 @@ class Hue2MQTT:
             await asyncio.sleep(interval)
             try:
                 stale = await asyncio.wait_for(self._find_stale(), max(interval, 10))
-            except (
-                asyncio.TimeoutError,
-                ClientError,
-                aiohue.errors.AiohueException,
-            ) as e:
+            except BRIDGE_ERRORS as e:
                 # Cannot tell, so keep the state of the last check.
                 LOGGER.warning(f"Could not check the Hue Bridge for stale state: {e!r}")
                 continue

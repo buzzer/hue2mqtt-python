@@ -95,6 +95,7 @@ Rooms and zones have the types `Room` and `Zone`.
 
 Hue2MQTT exits with a non-zero exit code if the watchdog fires or the event stream of the bridge ends.
 Run it under a supervisor that restarts it, e.g. systemd or Docker with a restart policy.
+On `SIGTERM`, `SIGINT` or `SIGHUP` it publishes the offline status, disconnects and exits with code 0.
 
 ### Aliases
 

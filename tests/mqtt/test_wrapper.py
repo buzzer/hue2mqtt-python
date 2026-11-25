@@ -181,3 +181,21 @@ async def test_publish_bad_topic_error() -> None:
         wr_pub.publish("bees/", StubModel(foo="bar"))
 
     await wr_pub.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_wrapper_handler_error_is_logged(caplog: pytest.LogCaptureFixture) -> None:
+    """Test that a failing handler is logged and not kept afterwards."""
+
+    async def failing_handler(match: Match[str], payload: str) -> None:
+        raise RuntimeError("boom")
+
+    wr = MQTTWrapper("foo", BROKER_INFO)
+    wr.subscribe("bees/+", failing_handler)
+    await wr.on_message(wr._client, "hue2mqtt/bees/bar", b"hive", 0, {})
+    assert len(wr._handler_tasks) == 1
+
+    await asyncio.sleep(0.01)
+    assert wr._handler_tasks == set()
+    assert "Handler for an MQTT message failed" in caplog.text
+    assert "boom" in caplog.text
